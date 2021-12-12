@@ -5,54 +5,59 @@
 #include "GaussianProcess/GaussianProcessModel.hpp"
 #include <fstream>
 
-
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
+
+GPModelDataSet::GPModelDataSet() :
+    Nx_(0),
+    size_(0),
+    noiseVariance_(0)
+{
+}
 
 GPModelDataSet::GPModelDataSet(const MatrixXd& xData, const VectorXd& yData, double noiseVariance) :
     xData_(xData),
     yData_(yData),
     noiseVariance_(noiseVariance)
 {
-    if (xData_.cols() != yData_.size()) {
-        throw std::runtime_error("Dataset dimensions are inconsistent");
+    if (xData_.rows() != yData_.size()) {
+        throw std::runtime_error(std::string(__func__) + ": Dataset dimensions are inconsistent");
     }
 
     if (noiseVariance < 0) {
-        throw std::runtime_error("Noise variance must be non-negative");
+        throw std::runtime_error(std::string(__func__) + ": Noise variance must be non-negative");
     }
 
-    Nx_ = xData.rows();
-    size_ = xData_.cols();
+    Nx_ = xData.cols();
+    size_ = xData_.rows();
 
 }
 
 GPModelDataSet::GPModelDataSet(std::string_view datafile)
 {
     // TODO: Implement using fstream
-    throw std::runtime_error("Not Implemented");
-
+    throw std::runtime_error(std::string(__func__) + ": Not Implemented");
 }
 
 void GPModelDataSet::append(const GPModelDataSet& data)
 {
-    if (data.Nx_ != Nx_) {
-        throw std::runtime_error("Cannot append data, X shape doesn't match");
+    if (data.Nx_ != Nx_) { 
+        throw std::runtime_error(std::string(__func__) + ": Cannot append data, X shape doesn't match");
     }
 
     size_ += data.size_;
     xData_.conservativeResize(size_, Nx_);
     yData_.conservativeResize(size_);
 
-    xData_.bottomRows(size_) = data.xData_;
-    yData_.tail(size_) = data.yData_;
+    xData_.bottomRows(data.size_) = data.xData_;
+    yData_.tail(data.size_) = data.yData_;
 }
 
 void GPModelDataSet::append(std::string_view datafile)
 {
     // TODO: implement this
-    throw std::runtime_error("Not Implemented");
+    throw std::runtime_error(std::string(__func__) + ": Not Implemented");
 }
 
 
@@ -65,6 +70,10 @@ GaussianProcessModel::GaussianProcessModel(KernelFunction trainingKernelFunc, Ke
 void GaussianProcessModel::fit(const GPModelDataSet& data)
 {
     // Save data for inference
+    if (data.size() < 1) {
+        throw std::runtime_error(std::string(__func__) + ": Cannot fit to empty dataset");
+    }
+
     trainingDataSet_ = data;
 
     // TODO: Implement hyperparameter optimization
@@ -77,66 +86,80 @@ void GaussianProcessModel::fit(const GPModelDataSet& data)
 
 void GaussianProcessModel::updateFit(const GPModelDataSet& data)
 {   
+    // If no prior data has been added, call the basic fit
+    if (!fitted_) {
+        fit(data);
+        return;
+    }
+    
     if (data.Nx() != trainingDataSet_.Nx()) {
-        throw std::runtime_error("Additional data must have same input dimension as existing model");
+        throw std::runtime_error(std::string(__func__) + ": Additional data must have same input dimension as existing model");
     }
 
+    // update the kernel
     updateTrainingKernel_(data);
 
     // update training dataset
     trainingDataSet_.append(data);
-
 }
 
-double GaussianProcessModel::predict(double& predictionVariance, const VectorXd& xInput, bool computeVariance /* false */)
+double GaussianProcessModel::predict(const VectorXd& xInput)
 {
-    // compute kernel between prediction input and training data (k*)
-    VectorXd inputAndDataKernel(trainingDataSet_.size());  
-    for (Index i = 0; i < trainingDataSet_.size(); ++i) {
-        inputAndDataKernel(i) = inferenceKernelFunc_(trainingDataSet_.xData(i), xInput);
+    if (!fitted_) {
+        throw std::runtime_error(std::string(__func__) + ": No model fitted");
+    }
+
+    if (xInput.size() != trainingDataSet_.Nx()) {
+       throw std::runtime_error(std::string(__func__) + ": Invalid input size for prediction");
+    }
+   
+   // compute kernel between prediction input and training data (k*)
+    inputAndDataKernel_.resize(modelSize());  
+    for (Index i = 0; i < modelSize(); ++i) {
+        inputAndDataKernel_(i) = inferenceKernelFunc_(trainingDataSet_.xData(i), xInput);
     }
 
     // compute prediction input kernel with itself (k**)
-    double inputKernel = inferenceKernelFunc_(xInput, xInput);
+    inputKernel_ = inferenceKernelFunc_(xInput, xInput);
 
     // mean (should be a scalar)
-    double mean = (inputAndDataKernel.transpose() * kernelLLT_.solve(trainingDataSet_.yData())).value();
+    return (inputAndDataKernel_.transpose() * kernelLLT_.solve(trainingDataSet_.yData())).value();
+}
 
-    // variance
-    if (computeVariance) {
-        predictionVariance = inputKernel - (inputAndDataKernel.transpose() * kernelLLT_.solve(inputAndDataKernel)).value();
-    }
+double GaussianProcessModel::predict(const VectorXd& xInput, double& predictionVariance)
+{
+    double mean = predict(xInput);
+    predictionVariance = inputKernel_ - (inputAndDataKernel_.transpose() * kernelLLT_.solve(inputAndDataKernel_)).value();  
 
     return mean;
-
 }
 
 void GaussianProcessModel::saveModel(std::string_view filePath)
 {
     // TODO: Implement this
     // Save training data, kernel and hyperparameters to a .gpfit file
-    throw std::runtime_error("Not implemented");
+    throw std::runtime_error(std::string(__func__) + ": Not implemented");
 }
 
 void GaussianProcessModel::loadModel(std::string_view filePath)
 {
     // TODO: Implement this
-    throw std::runtime_error("Not implemented");
+    throw std::runtime_error(std::string(__func__) + ": Not implemented");
 }
 
 void GaussianProcessModel::computeTrainingKernel_(void)
 {
-    kernel_.resize(trainingDataSet_.size(), trainingDataSet_.size());
+    kernel_.resize(modelSize(), modelSize());
 
-    for (Index i = 0; i < trainingDataSet_.size(); ++i) {
-        for (Index j = i; j < trainingDataSet_.size(); ++j) {
+    for (Index i = 0; i < modelSize(); ++i) {
+        for (Index j = i; j < modelSize(); ++j) {
             kernel_(i, j) = trainingKernelFunc_(trainingDataSet_.xData(i), trainingDataSet_.xData(j));
         }
     }
-    kernel_.triangularView<Eigen::StrictlyLower>() = kernel_.triangularView<Eigen::StrictlyUpper>();
+    kernel_.triangularView<Eigen::StrictlyLower>() = kernel_.transpose();
     
     // Add the data noise
-    kernel_ += trainingDataSet_.noiseVariance() * MatrixXd::Identity(trainingDataSet_.size(), trainingDataSet_.size());
+    kernel_ += trainingDataSet_.noiseVariance() * MatrixXd::Identity(kernel_.rows(), kernel_.cols());
 
     // factorize the kernel
     kernelLLT_.compute(kernel_);
@@ -144,7 +167,7 @@ void GaussianProcessModel::computeTrainingKernel_(void)
 
 void GaussianProcessModel::updateTrainingKernel_(const GPModelDataSet& data)
 {
-    int nUpdated = trainingDataSet_.size() + data.size();
+    int nUpdated = modelSize() + data.size();
     kernel_.conservativeResize(nUpdated, nUpdated);
 
     // New data requires two new blocks to be computed in the kernel, B and C
@@ -152,21 +175,24 @@ void GaussianProcessModel::updateTrainingKernel_(const GPModelDataSet& data)
     //             |B' C| 
 
     // new diagonal block, C
+    MatrixXd Cblock(data.size(), data.size());
     for (Index i = 0; i < data.size(); ++i) {
         for (Index j = i; j < data.size(); ++j) {
-            kernel_(i + data.size(), j + data.size()) = trainingKernelFunc_(data.xData(i), data.xData(j));
+            Cblock(i, j) = trainingKernelFunc_(data.xData(i), data.xData(j));
         }
     }
+    Cblock.triangularView<Eigen::StrictlyLower>() = Cblock.transpose();
+    kernel_.bottomRightCorner(data.size(), data.size()) = Cblock;
 
     // new off diagonal block, B
-    Eigen::MatrixXd Bblock(trainingDataSet_.size(), data.size());
-    for (Index i = 0; i < trainingDataSet_.size(); ++i) {
+    MatrixXd Bblock(modelSize(), data.size());
+    for (Index i = 0; i < modelSize(); ++i) {
         for (Index j = 0; j < data.size(); ++j) {
             Bblock(i, j) = trainingKernelFunc_(trainingDataSet_.xData(i), data.xData(j));
         }
     }
-    kernel_.block(0, trainingDataSet_.size(), trainingDataSet_.size(), data.size()) = Bblock;
-    kernel_.block(trainingDataSet_.size(), 0, data.size(), trainingDataSet_.size()) = Bblock.transpose();
+    kernel_.topRightCorner(modelSize(), data.size()) = Bblock;
+    kernel_.bottomLeftCorner(data.size(), modelSize()) = Bblock.transpose();
 
     // Add the data noise
     kernel_ += trainingDataSet_.noiseVariance() * MatrixXd::Identity(nUpdated, nUpdated);

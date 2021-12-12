@@ -11,12 +11,12 @@ class GPModelDataSet
 {
 public:
 
-    GPModelDataSet() = default;
+    GPModelDataSet();
     GPModelDataSet(const Eigen::MatrixXd& xData, const Eigen::VectorXd& yData, double noiseVariance);
     GPModelDataSet(std::string_view datafile);
 
+    Eigen::VectorXd xData(Eigen::Index idx) const { return xData_.row(idx); }
     const Eigen::MatrixXd& xData(void) const { return xData_; }
-    const Eigen::MatrixXd& xData(Eigen::Index idx) const { return xData_.row(idx); }
     const Eigen::VectorXd& yData(void) const { return yData_; }
     double noiseVariance(void) const { return noiseVariance_; }
     int size(void) const { return size_; }
@@ -26,9 +26,9 @@ public:
     void append(std::string_view datafile);
 
 protected:
-    Eigen::MatrixXd xData_;
+    Eigen::MatrixXd xData_;         // rows => datapoints, cols => input dimension
     Eigen::VectorXd yData_;
-    double noiseVariance_;           // variance for data (assumes IId samples with Guassian noise)
+    double noiseVariance_;          // variance for data (assumes IId samples with Guassian noise)
 
     int Nx_;                // input vector dimension
     int size_;              // number of data points   
@@ -45,6 +45,8 @@ public:
     GaussianProcessModel() = delete;
     GaussianProcessModel(KernelFunction trainingKernelFunc, KernelFunction inferenceKernelFunc);
 
+    int modelSize(void) { return trainingDataSet_.size(); }
+    Eigen::MatrixXd kernel(void) { return kernel_; }
     void setTrainingKernelFunc(KernelFunction kernelFunc) { trainingKernelFunc_ = kernelFunc; }
     void setInferenceKernelFunc(KernelFunction kernelFunc) { inferenceKernelFunc_ = kernelFunc; }
 
@@ -56,10 +58,10 @@ public:
 
     /**
      * Performs prediction for a single test point
-     * If computeVariance is true, the conditional variance of the prediction given the data will be
-     * assigned to the predictionVariance argument
+     * If the predictionVariance argument is passed, it will be filled with the variance
      */ 
-    double predict(double& predictionVariance, const Eigen::VectorXd& xInput, bool computeVariance = false);
+    double predict(const Eigen::VectorXd& xInput);
+    double predict(const Eigen::VectorXd& xInput, double& predictionVariance);
 
     /**
      * Save and load the model
@@ -73,7 +75,6 @@ private:
     void computeTrainingKernel_(void);
     void updateTrainingKernel_(const GPModelDataSet& data);
 
-
     Eigen::MatrixXd kernel_;                // training data kernel
     Eigen::LLT<Eigen::MatrixXd> kernelLLT_; // Cholesky decomposition
 
@@ -83,6 +84,10 @@ private:
     KernelFunction inferenceKernelFunc_;
 
     bool fitted_ = false;
+
+    // Used for overloading prediction function
+    double inputKernel_;
+    Eigen::VectorXd inputAndDataKernel_;
 
     // TODO: The kernel function should have hyperparameters, theta to optimize
     // TOOD: optimize argmax(theta) log p(y|X;theta) during fitting
